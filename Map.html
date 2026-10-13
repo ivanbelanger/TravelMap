@@ -1,0 +1,394 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Canada Travel Advisory World Map</title>
+<link rel="stylesheet"
+ href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root {
+  --green:#238443; --yellow:#f2c744;
+  --orange:#e87526; --red:#c73535;
+  --ink:#172b3a; --muted:#617283; --line:#dce4ea;
+}
+* { box-sizing:border-box }
+body {
+  margin:0; font:15px/1.5 system-ui,-apple-system,sans-serif;
+  color:var(--ink); background:#f4f7fa;
+}
+header { background:#163650; color:white; padding:22px 5% }
+header h1 { margin:0 0 5px; font-size:clamp(22px,3vw,32px) }
+header p { margin:0; color:#e0ebf3 }
+main { max-width:1500px; padding:20px; margin:auto }
+.toolbar {
+  display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;
+}
+input,select,button {
+  font:inherit; padding:10px 12px; border:1px solid #cbd6df;
+  border-radius:8px; background:white; color:var(--ink);
+}
+input { flex:1; min-width:200px }
+button { cursor:pointer }
+button:hover { background:#edf3f7 }
+.layout {
+  display:grid; grid-template-columns:minmax(0,1fr) 330px;
+  gap:16px; align-items:start;
+}
+.panel {
+  background:white; border:1px solid var(--line);
+  border-radius:12px; overflow:hidden;
+}
+#map { height:min(68vh,720px); min-height:420px; background:#e8f0f5 }
+.side { padding:17px }
+.side h2 { font-size:20px; margin:0 0 10px }
+.muted { color:var(--muted); font-size:13px }
+.legend { display:grid; gap:8px; margin:16px 0 }
+.key { display:flex; align-items:center; gap:9px }
+.swatch { width:15px; height:15px; border-radius:3px; flex-shrink:0 }
+#results { max-height:38vh; overflow:auto; border-top:1px solid var(--line) }
+.result {
+  padding:10px 14px; border-bottom:1px solid #edf1f4;
+  cursor:pointer; display:flex; align-items:center; gap:9px;
+}
+.result:hover { background:#f2f7fa }
+.result .name { flex:1 }
+.risk { font-size:12px; font-weight:700 }
+#status { padding:10px 14px; background:#f0f5f8; font-size:13px }
+a { color:#075b91 }
+footer { padding:22px 5%; color:var(--muted); font-size:13px }
+.leaflet-popup-content { min-width:210px }
+.leaflet-popup-content h3 { margin:0 0 6px }
+.tag { display:inline-block; padding:3px 7px; border-radius:5px;
+  color:#fff; font-weight:700; font-size:12px }
+@media(max-width:850px) {
+  .layout { grid-template-columns:1fr }
+  #map { height:55vh; min-height:360px }
+  #results { max-height:300px }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Canada Travel Advisory World Map</h1>
+  <p>Worldwide destination risks and links to official Government of Canada advice</p>
+</header>
+
+<main>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search for a country or territory..."
+      aria-label="Search destinations">
+    <select id="filter" aria-label="Filter by risk level">
+      <option value="all">All risk levels</option>
+      <option value="1">Level 1 — Normal precautions</option>
+      <option value="2">Level 2 — High degree of caution</option>
+      <option value="3">Level 3 — Avoid non-essential travel</option>
+      <option value="4">Level 4 — Avoid all travel</option>
+      <option value="regional">Regional advice noted</option>
+    </select>
+    <button id="reload">Refresh data</button>
+  </div>
+
+  <div class="layout">
+    <section class="panel">
+      <div id="map" aria-label="Interactive world travel advisory map"></div>
+      <div id="status" role="status">Loading map and official advisory data…</div>
+    </section>
+
+    <aside class="panel side">
+      <h2>Risk level guide</h2>
+      <div class="legend">
+        <div class="key"><span class="swatch" style="background:var(--green)"></span>
+          <span><b>Level 1</b> — Exercise normal security precautions</span></div>
+        <div class="key"><span class="swatch" style="background:var(--yellow)"></span>
+          <span><b>Level 2</b> — Exercise a high degree of caution</span></div>
+        <div class="key"><span class="swatch" style="background:var(--orange)"></span>
+          <span><b>Level 3</b> — Avoid non-essential travel</span></div>
+        <div class="key"><span class="swatch" style="background:var(--red)"></span>
+          <span><b>Level 4</b> — Avoid all travel</span></div>
+        <div class="key"><span class="swatch" style="background:#aab7c2"></span>
+          <span>Not matched / unavailable</span></div>
+      </div>
+      <p class="muted">Select a country on the map or in the list to open its official advisory. Where regional advice exists, review the destination page for the specific areas affected.</p>
+      <h2 style="margin-top:22px">Destinations <span id="count"></span></h2>
+      <div id="results"></div>
+    </aside>
+  </div>
+  <p class="muted">
+    Official source:
+    <a href="https://travel.gc.ca/travelling/advisories"
+       target="_blank" rel="noopener">Government of Canada Travel Advice and Advisories</a>.
+    Always read the full advisory before making travel decisions.
+  </p>
+</main>
+
+<footer>
+  Independent map interface. Not an official Government of Canada website
+and not endorsed by the Government of Canada. Advisory information may
+change at any time. The official destination page takes precedence.
+</footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+"use strict";
+
+const DATA_URL =
+  "https://data.international.gc.ca/travel-voyage/index-alpha-eng.json";
+const GEO_URL =
+  "https://raw.githubusercontent.com/datasets/geo-countries/master/data/countries.geojson";
+const OFFICIAL_URL = "https://travel.gc.ca/travelling/advisories";
+
+const colors = {
+  1:"#238443", 2:"#f2c744", 3:"#e87526", 4:"#c73535", 0:"#aab7c2"
+};
+const labels = {
+  1:"Exercise normal security precautions",
+  2:"Exercise a high degree of caution",
+  3:"Avoid non-essential travel",
+  4:"Avoid all travel",
+  0:"Risk level not matched"
+};
+
+const map = L.map("map", {worldCopyJump:true}).setView([20,0],2);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+  attribution:'&copy; OpenStreetMap contributors &copy; CARTO',
+  maxZoom:8
+}).addTo(map);
+
+let geoLayer = null;
+let records = [];
+let byName = new Map();
+let geoFeatures = [];
+let featureLayers = new Map();
+
+const $ = id => document.getElementById(id);
+const norm = s => String(s || "").normalize("NFD")
+  .replace(/[\u0300-\u036f]/g,"").toLowerCase()
+  .replace(/&/g,"and").replace(/[^a-z0-9]/g,"");
+
+const aliases = {
+  unitedstates:"unitedstatesofamerica", usa:"unitedstatesofamerica",
+  us:"unitedstatesofamerica", southkorea:"republicofkorea",
+  northkorea:"democraticpeoplesrepublicofkorea",
+  russia:"russianfederation", vietnam:"vietnam",
+  laos:"laopeoplesdemocraticrepublic", syria:"syrianarabrepublic",
+  bolivia:"boliviaplurinationalstateof", tanzania:"unitedrepublicoftanzania",
+  moldova:"republicofmoldova", iran:"iranislamicrepublicof",
+  venezuela:"venezuelabolivarianrepublicof", taiwan:"taiwan",
+  czechrepublic:"czechia", ivorycoast:"cotedivoire",
+  palestine:"stateofpalestine", brunei:"bruneidarussalam",
+  cape verde:"caboverde"
+};
+function key(s) {
+  const n=norm(s);
+  return aliases[n] || n;
+}
+function get(obj, names) {
+  if (!obj || typeof obj !== "object") return "";
+  const wanted = names.map(norm);
+  for (const [k,v] of Object.entries(obj)) {
+    if (wanted.includes(norm(k)) &&
+        (typeof v === "string" || typeof v === "number")) return String(v);
+  }
+  return "";
+}
+function riskFrom(value) {
+  const s=String(value || "").toLowerCase();
+  if (/avoid all travel/.test(s)) return 4;
+  if (/avoid non.?essential travel/.test(s)) return 3;
+  if (/high degree of caution/.test(s)) return 2;
+  if (/normal security precautions/.test(s)) return 1;
+  return 0;
+}
+function walkObjects(node, out=[]) {
+  if (!node || typeof node !== "object") return out;
+  if (Array.isArray(node)) {
+    node.forEach(x => walkObjects(x,out));
+    return out;
+  }
+  out.push(node);
+  Object.values(node).forEach(x => {
+    if (x && typeof x === "object") walkObjects(x,out);
+  });
+  return out;
+}
+function extractRecords(json) {
+  const objects=walkObjects(json);
+  const found=new Map();
+  for (const o of objects) {
+    const name=get(o,["name","destination","country","title","destination_name"]);
+    if (!name || name.length>100) continue;
+    const allText=Object.entries(o)
+      .filter(([k,v]) => /risk|advisory|level|caution|travel/i.test(k) &&
+        typeof v==="string")
+      .map(([k,v])=>k+" "+v).join(" ");
+    let risk=riskFrom(allText);
+    if (!risk) {
+      for (const v of Object.values(o)) {
+        if (typeof v==="string") { risk=riskFrom(v); if(risk) break; }
+      }
+    }
+    const url=get(o,["url","link","web_url","advisory_url","href"]);
+    const date=get(o,["date","updated","last_updated","modified","update_date"]);
+    const regionText=Object.entries(o)
+      .filter(([k])=>/regional|region/i.test(k))
+      .map(([,v])=>typeof v==="string"?v:JSON.stringify(v)).join(" ");
+    const regional=/regional|region-specific/i.test(allText+" "+regionText);
+    if (risk || url || regional) {
+      const k=key(name);
+      const prior=found.get(k);
+      if (!prior || risk || url) found.set(k,{
+        name, risk:risk || (prior && prior.risk) || 0,
+        url:url || (prior && prior.url) || "",
+        date:date || (prior && prior.date) || "",
+        regional:regional || !!(prior && prior.regional)
+      });
+    }
+  }
+  return [...found.values()];
+}
+function officialLink(r) {
+  if (r.url && /^https:\/\/(travel\.gc\.ca|voyage\.gc\.ca|international\.gc\.ca)\//i.test(r.url))
+    return r.url;
+  return OFFICIAL_URL;
+}
+function styleFor(feature) {
+  const name=feature.properties.ADMIN || feature.properties.name ||
+    feature.properties.name_en || "";
+  const r=byName.get(key(name));
+  return {
+    fillColor:colors[r ? r.risk : 0],
+    weight:0.7, opacity:1, color:"#fff",
+    fillOpacity:r ? 0.82 : 0.48
+  };
+}
+function popupHTML(r, name) {
+  const safe=s=>String(s).replace(/[&<>"']/g,c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+  const level=r ? r.risk : 0;
+  const region=r && r.regional;
+  return `<h3>${safe((r && r.name) || name)}</h3>
+    <p><span class="tag" style="background:${colors[level]};color:${level===2?"#172b3a":"white"}">
+    ${safe(level ? "Level "+level : "Not matched")}</span></p>
+    <p>${safe(labels[level])}</p>
+    ${region ? "<p><b>Regional advisories noted.</b> Check the official page for affected areas.</p>" : ""}
+    ${r && r.date ? "<p>Data date: "+safe(r.date)+"</p>" : ""}
+    <p><a href="${safe(officialLink(r || {}))}" target="_blank" rel="noopener">
+    Open official Canadian advisory ↗</a></p>`;
+}
+function selectCountry(name) {
+  const r=byName.get(key(name));
+  if (!r) {
+    window.open(OFFICIAL_URL,"_blank","noopener");
+    return;
+  }
+  const layer=featureLayers.get(key(name));
+  if(layer) {
+    map.fitBounds(layer.getBounds(),{maxZoom:5});
+    layer.openPopup();
+  } else {
+    window.open(officialLink(r),"_blank","noopener");
+  }
+}
+function renderList() {
+  const query=norm($("search").value);
+  const filter=$("filter").value;
+  const shown=records.filter(r=>{
+    if(query && !norm(r.name).includes(query)) return false;
+    if(filter==="regional" && !r.regional) return false;
+    if(["1","2","3","4"].includes(filter) && r.risk!==Number(filter)) return false;
+    return true;
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+  $("count").textContent=`(${shown.length})`;
+  $("results").replaceChildren();
+  const fragment=document.createDocumentFragment();
+  shown.forEach(r=>{
+    const row=document.createElement("div");
+    row.className="result"; row.tabIndex=0;
+    const sw=document.createElement("span"); sw.className="swatch";
+    sw.style.background=colors[r.risk] || colors[0];
+    const nm=document.createElement("span"); nm.className="name";
+    nm.textContent=r.name+(r.regional?" *":"");
+    const level=document.createElement("span"); level.className="risk";
+    level.textContent=r.risk ? "L"+r.risk : "—";
+    row.append(sw,nm,level);
+    row.addEventListener("click",()=>selectCountry(r.name));
+    row.addEventListener("keydown",e=>{
+      if(e.key==="Enter" || e.key===" ") { e.preventDefault(); selectCountry(r.name); }
+    });
+    fragment.append(row);
+  });
+  $("results").append(fragment);
+}
+function repaint() {
+  if(geoLayer) geoLayer.setStyle(styleFor);
+  renderList();
+}
+async function load() {
+  $("status").textContent="Loading official advisory data…";
+  $("reload").disabled=true;
+  try {
+    const [dataResponse,geoResponse]=await Promise.all([
+      fetch(DATA_URL,{cache:"no-store"}),
+      geoFeatures.length ? Promise.resolve(null) : fetch(GEO_URL)
+    ]);
+    if(!dataResponse.ok) throw new Error("Official data returned HTTP "+dataResponse.status);
+    const json=await dataResponse.json();
+    const fresh=extractRecords(json);
+    if(!fresh.length) throw new Error(
+      "The official JSON format did not match the fields this version recognizes.");
+    records=fresh;
+    byName=new Map(records.map(r=>[key(r.name),r]));
+    if(geoResponse) {
+      if(!geoResponse.ok) throw new Error("World boundary data could not be loaded.");
+      const geo=await geoResponse.json();
+      geoFeatures=geo.features || [];
+    }
+    if(!geoLayer) {
+      geoLayer=L.geoJSON({type:"FeatureCollection",features:geoFeatures},{
+        style:styleFor,
+        onEachFeature:(feature,layer)=>{
+          const name=feature.properties.ADMIN || feature.properties.name ||
+            feature.properties.name_en || "Destination";
+          featureLayers.set(key(name),layer);
+          const r=byName.get(key(name));
+          layer.bindPopup(popupHTML(r,name));
+          layer.on({
+            mouseover:e=>e.target.setStyle({weight:2,color:"#263b4a",fillOpacity:1}),
+            mouseout:e=>geoLayer.resetStyle(e.target)
+          });
+        }
+      }).addTo(map);
+      map.fitBounds(geoLayer.getBounds(),{padding:[5,5]});
+    } else repaint();
+    renderList();
+    $("status").textContent=`Loaded ${records.length} advisory records. Retrieved ${new Date().toLocaleString()}. Check official destination pages for regional detail.`;
+  } catch(err) {
+    $("status").textContent="Could not fully load live data: "+err.message+
+      " Open the official advisory website below. This map does not substitute for official advice.";
+    console.error(err);
+    if(!geoLayer) {
+      try {
+        const response=await fetch(GEO_URL);
+        if(response.ok) {
+          const geo=await response.json();
+          geoLayer=L.geoJSON(geo,{style:styleFor}).addTo(map);
+          map.fitBounds(geoLayer.getBounds(),{padding:[5,5]});
+        }
+      } catch (_) {}
+    }
+  } finally {
+    $("reload").disabled=false;
+  }
+}
+$("search").addEventListener("input",renderList);
+$("filter").addEventListener("change",renderList);
+$("reload").addEventListener("click",load);
+load();
+})();
+</script>
+</body>
+</html>
